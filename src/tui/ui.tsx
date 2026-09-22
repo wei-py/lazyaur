@@ -133,3 +133,49 @@ export function Popup(props: {
     </box>
   )
 }
+
+export function SearchPopup(props: {
+  width: number
+  height: number
+  onSubmit: (value: string) => void
+}) {
+  const popupWidth = Math.min(props.width - 4, 64)
+  const contentHeight = 4
+  const left = Math.max(1, Math.round((props.width - popupWidth) / 2))
+  const top = Math.max(1, Math.round((props.height - contentHeight) / 2))
+  return (
+    <box
+      position="absolute"
+      left={left}
+      top={top}
+      width={popupWidth}
+      height={contentHeight}
+      border
+      borderStyle="rounded"
+      borderColor={COLORS.focus}
+      title="Search"
+      titleColor={COLORS.focus}
+      titleAlignment="center"
+      bottomTitle="enter search · esc cancel"
+      bottomTitleAlignment="center"
+      backgroundColor="#1F2438"
+      flexDirection="column"
+      paddingLeft={1}
+      paddingRight={1}
+      overflow="hidden"
+    >
+      <input
+        focused
+        placeholder="package name or keyword"
+        onSubmit={(value: unknown) => props.onSubmit(String(value))}
+        textColor={COLORS.text}
+        cursorColor={COLORS.focus}
+        backgroundColor="#1F2438"
+        focusedBackgroundColor="#1F2438"
+      />
+      <text wrapMode="none" fg={COLORS.dim}>
+        searches AUR + repositories (yay -Ss)
+      </text>
+    </box>
+  )
+}

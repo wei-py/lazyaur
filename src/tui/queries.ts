@@ -11,8 +11,18 @@ export type ForeignPkg = {
   version: string
 }
 
+export type SearchResult = {
+  name: string
+  version: string
+  origin: string
+  aur: boolean
+  meta: string
+  desc: string
+}
+
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
 const UPDATE_RE = /^(\S+)\s+(\S+)\s+->\s+(\S+)(?:\s+\[([^\]]+)\])?$/
+const SEARCH_HEAD_RE = /^(\S+)\/(\S+)\s+(\S+)(.*)$/
 
 function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "")
@@ -87,6 +97,38 @@ export async function fetchInfo(name: string): Promise<string> {
 
   const detail = (remote.stderr || local.stderr).trim()
   throw new Error(detail || `package not found: ${name}`)
+}
+
+export function parseSearch(stdout: string): SearchResult[] {
+  const results: SearchResult[] = []
+  for (const line of stripAnsi(stdout).split("\n")) {
+    if (line.trim() === "") continue
+    if (/^\s/.test(line)) {
+      const last = results[results.length - 1]
+      if (last) last.desc = last.desc === "" ? line.trim() : `${last.desc} ${line.trim()}`
+      continue
+    }
+    const match = SEARCH_HEAD_RE.exec(line.trim())
+    if (!match) continue
+    const origin = match[1]!
+    results.push({
+      name: match[2]!,
+      version: match[3]!,
+      origin,
+      aur: origin === "aur",
+      meta: match[4]!.trim(),
+      desc: "",
+    })
+  }
+  return results
+}
+
+export async function fetchSearch(query: string): Promise<SearchResult[]> {
+  const cmd = ["yay", "--color", "never", "-Ss", "--", query]
+  const { stdout, stderr, code } = await capture(cmd)
+  const failure = queryFailure(cmd, stdout, stderr, code)
+  if (failure) throw failure
+  return parseSearch(stdout)
 }
 
 export function runStreaming(

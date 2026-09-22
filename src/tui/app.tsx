@@ -4,19 +4,24 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   fetchForeign,
   fetchInfo,
+  fetchSearch,
   fetchUpdates,
   runStreaming,
   type ForeignPkg,
+  type SearchResult,
   type UpdateEntry,
 } from "./queries"
-import { COLORS, Hint, ListPanel, MenuBar, Panel, Popup, Row } from "./ui"
+import { COLORS, Hint, ListPanel, MenuBar, Panel, Popup, Row, SearchPopup } from "./ui"
 
-type FocusPanel = "updates" | "aur" | "info"
+type ListKey = "updates" | "aur" | "search"
+type FocusPanel = ListKey | "info"
 type PopupState =
   | { kind: "confirm"; title: string; lines: string[]; onConfirm: () => void }
   | { kind: "info"; title: string; lines: string[] }
+type SearchState = { query: string; results: SearchResult[] | null; error: string | null }
 
-const PANELS: FocusPanel[] = ["updates", "aur", "info"]
+const BASE_PANELS: FocusPanel[] = ["updates", "aur", "info"]
+const SEARCH_PANELS: FocusPanel[] = ["search", "info"]
 const STATUS_HEIGHT = 4
 const MENU_HEIGHT = 1
 const HELP_LINES = [
@@ -25,11 +30,13 @@ const HELP_LINES = [
   "tab / shift+tab    cycle panels forward / backward",
   "g / G              jump to top / bottom of panel",
   "enter              open the info panel",
-  "u                  update the selected package",
-  "U                  update all pending packages",
-  "r                  refresh queries",
-  "y / n              confirm / cancel a popup",
-  "q                  quit",
+  "/                  search packages (AUR + repos)",
+  "u / U              update the selected / all packages",
+  "d                  download PKGBUILD source (yay -G)",
+  "i                  download and install (yay -S)",
+  "r                  refresh queries, re-run search",
+  "esc                close search, cancel popup",
+  "q / ?              quit / toggle this help",
 ]
 
 function clamp(value: number, lo: number, hi: number): number {
@@ -55,12 +62,16 @@ export function App() {
 
   const [updates, setUpdates] = useState<UpdateEntry[] | null>(null)
   const [foreign, setForeign] = useState<ForeignPkg[] | null>(null)
+  const [search, setSearch] = useState<SearchState | null>(null)
   const [curUpdates, setCurUpdates] = useState(0)
   const [curAur, setCurAur] = useState(0)
+  const [curSearch, setCurSearch] = useState(0)
   const [offUpdates, setOffUpdates] = useState(0)
   const [offAur, setOffAur] = useState(0)
+  const [offSearch, setOffSearch] = useState(0)
   const [focus, setFocus] = useState<FocusPanel>("updates")
-  const [lastList, setLastList] = useState<"updates" | "aur">("updates")
+  const [lastList, setLastList] = useState<ListKey>("updates")
+  const [promptOpen, setPromptOpen] = useState(false)
   const [info, setInfo] = useState<{ loading: boolean; text: string }>({ loading: true, text: "" })
   const [infoScroll, setInfoScroll] = useState(0)
   const [popup, setPopup] = useState<PopupState | null>(null)
@@ -69,10 +80,13 @@ export function App() {
 
   const infoCache = useRef(new Map<string, string>())
   const killRef = useRef<(() => void) | null>(null)
+  const returnFocus = useRef<"updates" | "aur">("updates")
 
   const updateList = updates ?? []
   const foreignList = foreign ?? []
+  const searchList = search?.results ?? []
   const aurUpdateCount = updateList.filter((entry) => entry.aur).length
+  const panels = search !== null ? SEARCH_PANELS : BASE_PANELS
 
   const mainHeight = Math.max(6, height - STATUS_HEIGHT - MENU_HEIGHT)
   const updatesHeight = Math.max(3, Math.round(mainHeight * 0.62))
@@ -121,10 +135,15 @@ export function App() {
     if (focus === "updates" || focus === "aur") setLastList(focus)
   }, [focus])
 
-  const infoList = focus === "info" ? lastList : focus === "aur" ? "aur" : "updates"
-  const infoIndex = infoList === "aur" ? curAur : curUpdates
+  const activeList: ListKey = focus === "info" ? lastList : focus
+  const infoIndex =
+    activeList === "aur" ? curAur : activeList === "search" ? curSearch : curUpdates
   const infoPkg =
-    infoList === "aur" ? (foreignList[infoIndex]?.name ?? null) : (updateList[infoIndex]?.name ?? null)
+    activeList === "aur"
+      ? (foreignList[infoIndex]?.name ?? null)
+      : activeList === "search"
+        ? (searchList[infoIndex]?.name ?? null)
+        : (updateList[infoIndex]?.name ?? null)
 
   useEffect(() => {
     if (!infoPkg) {
@@ -201,11 +220,17 @@ export function App() {
           setOffAur((offset) => followOffset(next, aurRows, foreignList.length, offset))
           return next
         })
+      } else if (focus === "search") {
+        setCurSearch((cursor) => {
+          const next = clamp(cursor + delta, 0, Math.max(0, searchList.length - 1))
+          setOffSearch((offset) => followOffset(next, infoRows, searchList.length, offset))
+          return next
+        })
       } else {
         setInfoScroll((scroll) => clamp(scroll + delta, 0, Math.max(0, infoLines.length - infoRows)))
       }
     },
-    [focus, updateList.length, foreignList.length, updatesRows, aurRows, infoLines.length, infoRows],
+    [focus, updateList.length, foreignList.length, searchList.length, updatesRows, aurRows, infoLines.length, infoRows],
   )
 
   const jumpCursor = useCallback(
@@ -218,19 +243,26 @@ export function App() {
         const next = toEnd ? Math.max(0, foreignList.length - 1) : 0
         setCurAur(next)
         setOffAur((offset) => followOffset(next, aurRows, foreignList.length, offset))
+      } else if (focus === "search") {
+        const next = toEnd ? Math.max(0, searchList.length - 1) : 0
+        setCurSearch(next)
+        setOffSearch((offset) => followOffset(next, infoRows, searchList.length, offset))
       } else {
         setInfoScroll(toEnd ? Math.max(0, infoLines.length - infoRows) : 0)
       }
     },
-    [focus, updateList.length, foreignList.length, updatesRows, aurRows, infoLines.length, infoRows],
+    [focus, updateList.length, foreignList.length, searchList.length, updatesRows, aurRows, infoLines.length, infoRows],
   )
 
-  const cyclePanel = useCallback((delta: number) => {
-    setFocus((current) => {
-      const index = PANELS.indexOf(current)
-      return PANELS[(index + delta + PANELS.length) % PANELS.length]!
-    })
-  }, [])
+  const cyclePanel = useCallback(
+    (delta: number) => {
+      setFocus((current) => {
+        const index = panels.indexOf(current)
+        return panels[(index + delta + panels.length) % panels.length]!
+      })
+    },
+    [panels],
+  )
 
   const updateSelected = useCallback(() => {
     if (focus === "updates") {
@@ -274,6 +306,78 @@ export function App() {
     })
   }, [updateList, aurUpdateCount, runCommand])
 
+  const runSearch = useCallback(
+    (raw: string) => {
+      const query = raw.trim()
+      setPromptOpen(false)
+      if (query === "") return
+      setSearch({ query, results: null, error: null })
+      setCurSearch(0)
+      setOffSearch(0)
+      setFocus("search")
+      setLastList("search")
+      pushLog(`$ yay -Ss ${query}`)
+      fetchSearch(query)
+        .then((results) => {
+          setSearch((current) => (current?.query === query ? { ...current, results } : current))
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          setSearch((current) =>
+            current?.query === query ? { ...current, results: [], error: message } : current,
+          )
+          pushLog(`error: ${message}`)
+        })
+    },
+    [pushLog],
+  )
+
+  const closeSearch = useCallback(() => {
+    setSearch(null)
+    setFocus(returnFocus.current)
+    setLastList(returnFocus.current)
+  }, [])
+
+  const openSearch = useCallback(() => {
+    if (focus !== "search" && lastList !== "search") {
+      returnFocus.current = focus === "info" ? lastList : focus
+    }
+    setPromptOpen(true)
+  }, [focus, lastList])
+
+  const selectedName = useCallback((): string | null => {
+    if (focus === "updates") return updateList[curUpdates]?.name ?? null
+    if (focus === "aur") return foreignList[curAur]?.name ?? null
+    if (focus === "search") return searchList[curSearch]?.name ?? null
+    return null
+  }, [focus, updateList, curUpdates, foreignList, curAur, searchList, curSearch])
+
+  const downloadSelected = useCallback(() => {
+    const name = selectedName()
+    if (!name) return
+    setPopup({
+      kind: "confirm",
+      title: "Download PKGBUILD",
+      lines: [
+        `${name}`,
+        `source lands in ${tildePath(process.cwd())}/${name}`,
+        "yay -G fetches the PKGBUILD (AUR or ABS)",
+      ],
+      onConfirm: () => runCommand(["yay", "-G", name], `yay -G ${name}`),
+    })
+  }, [selectedName, runCommand])
+
+  const installSelected = useCallback(() => {
+    const name = selectedName()
+    if (!name) return
+    setPopup({
+      kind: "confirm",
+      title: "Download and install",
+      lines: [`${name}`, "yay -S downloads and installs the package", "system change, needs sudo"],
+      onConfirm: () => runCommand(["yay", "-S", "--noconfirm", name], `yay -S ${name}`),
+    })
+  }, [selectedName, runCommand])
+
   useKeyboard((key: KeyEvent) => {
     if (popup) {
       if (popup.kind === "confirm") {
@@ -287,6 +391,11 @@ export function App() {
       } else {
         setPopup(null)
       }
+      return
+    }
+
+    if (promptOpen) {
+      if (key.name === "escape") setPromptOpen(false)
       return
     }
 
@@ -327,20 +436,36 @@ export function App() {
       case "return":
         if (focus !== "info") setFocus("info")
         return
+      case "/":
+        if (!busy) openSearch()
+        return
+      case "escape":
+        if (search) closeSearch()
+        return
+      case "d":
+        if (!busy && focus !== "info") downloadSelected()
+        return
+      case "i":
+        if (!busy && focus !== "info") installSelected()
+        return
       case "u":
-        if (!busy && focus !== "info") updateSelected()
+        if (!busy && (focus === "updates" || focus === "aur")) updateSelected()
         return
       case "U":
         if (!busy) updateAll()
         return
       case "r":
-        if (!busy) void refresh()
+        if (!busy) {
+          void refresh()
+          if (search) runSearch(search.query)
+        }
         return
       case "?":
         setPopup({ kind: "info", title: "Keys", lines: HELP_LINES })
         return
       default:
         if (key.sequence === "?") setPopup({ kind: "info", title: "Keys", lines: HELP_LINES })
+        else if (key.sequence === "/" && !busy) openSearch()
     }
   })
 
@@ -372,11 +497,33 @@ export function App() {
     </Row>
   ))
 
+  const searchRowsList: ReactNode[] = searchList.map((result, index) => (
+    <Row
+      key={`${result.origin}/${result.name}`}
+      selected={focus === "search" && index === curSearch}
+    >
+      <span fg={result.aur ? COLORS.aur : COLORS.repo}>{result.aur ? "[aur]" : "[rep]"}</span>
+      <span fg={COLORS.text}> {result.name.padEnd(24).slice(0, 24)}</span>
+      <span fg={COLORS.ok}> {result.version.padEnd(13).slice(0, 13)}</span>
+      <span fg={COLORS.dim}> {result.meta}</span>
+    </Row>
+  ))
+
   const updateTitle =
     updates === null
       ? "Updates …"
       : `Updates (${updateList.length}${aurUpdateCount > 0 ? `, ${aurUpdateCount} aur` : ""})`
   const aurTitle = foreign === null ? "AUR …" : `AUR installed (${foreignList.length})`
+  const searchTitle =
+    search === null ? "Search" : `Search "${search.query}" (${searchList.length})`
+  const searchEmpty =
+    search === null
+      ? "press / to search"
+      : search.results === null
+        ? "searching…"
+        : search.error
+          ? `error: ${search.error}`
+          : `no results for "${search.query}"`
 
   const lastLog = log.length > 0 ? log[log.length - 1]! : ""
   const stateText = running !== null ? `running: ${running}` : updates === null ? "checking…" : "idle"
@@ -386,6 +533,9 @@ export function App() {
       ["j/k", "move"],
       ["h/l", "panels"],
       ["enter", "info"],
+      ["/", "search"],
+      ["d", "download"],
+      ["i", "install"],
       ["u", "update"],
       ["U", "update all"],
       ["r", "refresh"],
@@ -396,8 +546,22 @@ export function App() {
       ["j/k", "move"],
       ["h/l", "panels"],
       ["enter", "info"],
+      ["/", "search"],
+      ["d", "download"],
+      ["i", "install"],
       ["u", "update"],
       ["r", "refresh"],
+      ["?", "help"],
+      ["q", "quit"],
+    ],
+    search: [
+      ["j/k", "move"],
+      ["h/l", "panels"],
+      ["enter", "info"],
+      ["/", "search"],
+      ["d", "download"],
+      ["i", "install"],
+      ["esc", "close"],
       ["?", "help"],
       ["q", "quit"],
     ],
@@ -405,6 +569,7 @@ export function App() {
       ["j/k", "scroll"],
       ["h/l", "panels"],
       ["g/G", "top/end"],
+      ["/", "search"],
       ["r", "refresh"],
       ["?", "help"],
       ["q", "quit"],
@@ -415,24 +580,38 @@ export function App() {
     <box width="100%" height="100%" flexDirection="column">
       <box flexDirection="row" height={mainHeight}>
         <box flexDirection="column" width={leftWidth} height={mainHeight} overflow="hidden">
-          <ListPanel
-            title={updateTitle}
-            focused={focus === "updates"}
-            height={updatesHeight}
-            cursor={curUpdates}
-            offset={offUpdates}
-            rows={updateRows}
-            empty={updates === null ? "checking for updates…" : "no pending updates"}
-          />
-          <ListPanel
-            title={aurTitle}
-            focused={focus === "aur"}
-            height={aurHeight}
-            cursor={curAur}
-            offset={offAur}
-            rows={aurRowsList}
-            empty={foreign === null ? "loading…" : "no foreign packages"}
-          />
+          {search !== null ? (
+            <ListPanel
+              title={searchTitle}
+              focused={focus === "search"}
+              height={mainHeight}
+              cursor={curSearch}
+              offset={offSearch}
+              rows={searchRowsList}
+              empty={searchEmpty}
+            />
+          ) : (
+            <>
+              <ListPanel
+                title={updateTitle}
+                focused={focus === "updates"}
+                height={updatesHeight}
+                cursor={curUpdates}
+                offset={offUpdates}
+                rows={updateRows}
+                empty={updates === null ? "checking for updates…" : "no pending updates"}
+              />
+              <ListPanel
+                title={aurTitle}
+                focused={focus === "aur"}
+                height={aurHeight}
+                cursor={curAur}
+                offset={offAur}
+                rows={aurRowsList}
+                empty={foreign === null ? "loading…" : "no foreign packages"}
+              />
+            </>
+          )}
         </box>
         <Panel
           title={infoPkg ? `Info: ${infoPkg}` : "Info"}
@@ -502,6 +681,7 @@ export function App() {
           confirm={popup.kind === "confirm"}
         />
       ) : null}
+      {promptOpen ? <SearchPopup width={width} height={height} onSubmit={runSearch} /> : null}
     </box>
   )
 }

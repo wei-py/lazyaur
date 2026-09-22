@@ -14,6 +14,8 @@ Usage:
 Keys in the TUI:
   j/k or arrows   move cursor / scroll    h/l or arrows   switch panel
   tab/shift+tab   cycle panels            enter           open info panel
+  /               search AUR + repos      esc             close search / cancel
+  d               download PKGBUILD       i               download + install
   u               update selected         U               update all
   r               refresh                 q               quit
   ?               help                    y/n             confirm/cancel popup
