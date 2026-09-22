@@ -1,0 +1,52 @@
+# --- dependencies (bun install) ---
+node_modules/
+.bun/
+
+# --- build output ---
+dist/
+out/
+build/
+*.tgz
+
+# compiled single-file binaries (bun build --compile) and stray bundles
+/lazyaur
+/lazyaur-*
+*.bun-build
+src/cli.js
+
+# --- code coverage ---
+coverage/
+*.lcov
+
+# --- logs ---
+logs/
+*.log
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# --- environment variables (bun auto-loads .env) ---
+.env
+.env.*
+!.env.example
+
+# --- caches / tooling ---
+.cache/
+.tmp/
+.eslintcache
+*.tsbuildinfo
+
+# --- editor / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# --- agent skills installed from skills-lock.json (regenerate, do not vendor) ---
+.agents/skills/
+.claude/skills/
+.claude/settings.local.json
+
+# --- local runtime state (yay/pacman caches the TUI writes) ---
+*.pid

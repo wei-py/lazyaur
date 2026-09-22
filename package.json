@@ -1,0 +1,26 @@
+{
+  "name": "lazyaur",
+  "version": "0.1.0",
+  "module": "src/cli.ts",
+  "bin": {
+    "lazyaur": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.3.0"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.5.12",
+    "@opentui/react": "^0.5.12",
+    "react": "^19.3.0"
+  }
+}
