@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - run: bun install --frozen-lockfile
+
+      - name: Smoke test CLI
+        run: |
+          bun src/cli.js --help
+          bun src/cli.js --version
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install cross-target natives
+        run: |
+          bun install --frozen-lockfile
+          bun install --frozen-lockfile --os linux --cpu arm64
+          bun install --frozen-lockfile --os darwin --cpu x64
+          bun install --frozen-lockfile --os darwin --cpu arm64
+
+      - name: Compile all release targets
+        run: |
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            bun build --compile --target=bun-$target src/cli.js --outfile lazyaur-$target
+          done
