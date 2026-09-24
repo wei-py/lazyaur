@@ -1,40 +1,18 @@
-export type UpdateEntry = {
-  name: string
-  from: string
-  to: string
-  age?: string
-  aur: boolean
-}
-
-export type ForeignPkg = {
-  name: string
-  version: string
-}
-
-export type SearchResult = {
-  name: string
-  version: string
-  origin: string
-  aur: boolean
-  meta: string
-  desc: string
-}
-
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
 const UPDATE_RE = /^(\S+)\s+(\S+)\s+->\s+(\S+)(?:\s+\[([^\]]+)\])?$/
 const SEARCH_HEAD_RE = /^(\S+)\/(\S+)\s+(\S+)(.*)$/
 
-function stripAnsi(text: string): string {
+function stripAnsi(text) {
   return text.replace(ANSI_RE, "")
 }
 
-function queryFailure(cmd: string[], stdout: string, stderr: string, code: number): Error | null {
+function queryFailure(cmd, stdout, stderr, code) {
   if (stdout.trim() !== "" || code <= 1) return null
   const detail = stderr.trim() || `${cmd.join(" ")} exited with code ${code}`
   return new Error(detail)
 }
 
-async function capture(cmd: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+async function capture(cmd) {
   const proc = Bun.spawn({ cmd, stdout: "pipe", stderr: "pipe" })
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -44,13 +22,8 @@ async function capture(cmd: string[]): Promise<{ stdout: string; stderr: string;
   return { stdout, stderr, code }
 }
 
-export async function fetchForeign(): Promise<ForeignPkg[]> {
-  const cmd = ["pacman", "-Qm"]
-  const { stdout, stderr, code } = await capture(cmd)
-  const failure = queryFailure(cmd, stdout, stderr, code)
-  if (failure) throw failure
-
-  const pkgs: ForeignPkg[] = []
+function parsePkgLines(stdout) {
+  const pkgs = []
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim()
     if (!trimmed) continue
@@ -61,22 +34,40 @@ export async function fetchForeign(): Promise<ForeignPkg[]> {
   return pkgs
 }
 
-export async function fetchUpdates(): Promise<UpdateEntry[]> {
-  const cmd = ["yay", "-Qu"]
-  const [result, foreign] = await Promise.all([capture(cmd), fetchForeign()])
+async function fetchForeignNames() {
+  const cmd = ["pacman", "-Qm"]
+  const { stdout, stderr, code } = await capture(cmd)
+  const failure = queryFailure(cmd, stdout, stderr, code)
+  if (failure) throw failure
+  return new Set(parsePkgLines(stdout).map((pkg) => pkg.name))
+}
+
+export async function fetchInstalled() {
+  const cmd = ["pacman", "-Q"]
+  const [result, foreign] = await Promise.all([capture(cmd), fetchForeignNames()])
   const failure = queryFailure(cmd, result.stdout, result.stderr, result.code)
   if (failure) throw failure
+  // display order: AUR block first, then repository packages, name-sorted
+  // within each (pacman -Q already is) — mirrors the origin grouping of search
+  return parsePkgLines(result.stdout)
+    .map(({ name, version }) => ({ name, version, aur: foreign.has(name) }))
+    .sort((a, b) => Number(b.aur) - Number(a.aur))
+}
 
-  const aurNames = new Set(foreign.map((pkg) => pkg.name))
-  const entries: UpdateEntry[] = []
+export async function fetchUpdates() {
+  const cmd = ["yay", "-Qu"]
+  const [result, aurNames] = await Promise.all([capture(cmd), fetchForeignNames()])
+  const failure = queryFailure(cmd, result.stdout, result.stderr, result.code)
+  if (failure) throw failure
+  const entries = []
   for (const line of result.stdout.split("\n")) {
     const match = UPDATE_RE.exec(line.trim())
     if (!match) continue
-    const name = match[1]!
+    const name = match[1]
     entries.push({
       name,
-      from: match[2]!,
-      to: match[3]!,
+      from: match[2],
+      to: match[3],
       age: match[4],
       aur: aurNames.has(name),
     })
@@ -84,7 +75,7 @@ export async function fetchUpdates(): Promise<UpdateEntry[]> {
   return entries
 }
 
-export async function fetchInfo(name: string): Promise<string> {
+export async function fetchInfo(name) {
   const remote = await capture(["yay", "-Si", name])
   if (remote.code === 0 && remote.stdout.trim() !== "") {
     return stripAnsi(remote.stdout).trimEnd()
@@ -99,8 +90,8 @@ export async function fetchInfo(name: string): Promise<string> {
   throw new Error(detail || `package not found: ${name}`)
 }
 
-export function parseSearch(stdout: string): SearchResult[] {
-  const results: SearchResult[] = []
+export function parseSearch(stdout) {
+  const results = []
   for (const line of stripAnsi(stdout).split("\n")) {
     if (line.trim() === "") continue
     if (/^\s/.test(line)) {
@@ -110,20 +101,20 @@ export function parseSearch(stdout: string): SearchResult[] {
     }
     const match = SEARCH_HEAD_RE.exec(line.trim())
     if (!match) continue
-    const origin = match[1]!
+    const origin = match[1]
     results.push({
-      name: match[2]!,
-      version: match[3]!,
+      name: match[2],
+      version: match[3],
       origin,
       aur: origin === "aur",
-      meta: match[4]!.trim(),
+      meta: match[4].trim(),
       desc: "",
     })
   }
   return results
 }
 
-export async function fetchSearch(query: string): Promise<SearchResult[]> {
+export async function fetchSearch(query) {
   const cmd = ["yay", "--color", "never", "-Ss", "--", query]
   const { stdout, stderr, code } = await capture(cmd)
   const failure = queryFailure(cmd, stdout, stderr, code)
@@ -131,20 +122,28 @@ export async function fetchSearch(query: string): Promise<SearchResult[]> {
   return parseSearch(stdout)
 }
 
-export function runStreaming(
-  cmd: string[],
-  onLine: (line: string) => void,
-): { done: Promise<number>; kill: () => void } {
-  const proc = Bun.spawn({ cmd, stdout: "pipe", stderr: "pipe" })
-  const kill = (): void => {
+export function runStreaming(cmd, onLine, env) {
+  const proc = Bun.spawn({
+    cmd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: env ? { ...Bun.env, ...env } : undefined,
+  })
+  const kill = () => {
+    // kills the whole process group when the command was spawned via setsid,
+    // so builds (makepkg) die with their parent instead of being orphaned
     try {
-      proc.kill("SIGTERM")
+      process.kill(-proc.pid, "SIGTERM")
     } catch {
-      // process already exited
+      try {
+        proc.kill("SIGTERM")
+      } catch {
+        // process already exited
+      }
     }
   }
 
-  const pump = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
+  const pump = async (stream) => {
     const reader = stream.getReader()
     const decoder = new TextDecoder()
     let carry = ""

@@ -1,4 +1,4 @@
-export async function updateCommand(extraArgs: string[]): Promise<void> {
+export async function updateCommand(extraArgs) {
   if (!Bun.which("yay")) {
     console.error("lazyaur: yay not found in PATH")
     process.exitCode = 1
